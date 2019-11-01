@@ -61,14 +61,18 @@ const uint16_t Frame_1[FRAME_LEN] = {0xFFB3, 0xFFAD, 0xFFB4, 0xFFAA, 0xFFB3, 0xF
 
 uint8_t    emul_slave_addr      = 0x33;
 eSUBPAGE_t emul_active_subpage  = eSUBPAGE_INVALID;
-int        readStatusRegCounter = 0;
+
+getTime_t gfptrGetTime;
+float latestFrameTime = 0u;
+float latestGuardTime = 0u;
+float currentTime = 0u;
 
 void copy_chess_pattern(const uint16_t *subframe, eSUBPAGE_t eSubpage);
 void copy_tvintl_pattern(const uint16_t *subframe, eSUBPAGE_t eSubpage);
 void sensor_proces(uint16_t addr, uint16_t value, i2c_operation_t operation);
 
 
-void MLX90640_I2CInit(void)
+void MLX90640_I2CInit(getTime_t getTime)
 {
     int i;
     
@@ -90,7 +94,10 @@ void MLX90640_I2CInit(void)
     Memory[STATUS_REG_ADDRESS] = 0x0000;
     Memory[STATUS_REG_ADDRESS] |= 0x0010;
 
-    int readStatusRegCounter = 0;
+    gfptrGetTime = getTime;
+    latestFrameTime = gfptrGetTime();
+    latestGuardTime = gfptrGetTime();
+    currentTime = gfptrGetTime();
 }
 
 int MLX90640_I2CRead(uint8_t slaveAddr, uint16_t startAddress, uint16_t nMemAddressRead, uint16_t *data)
@@ -145,26 +152,20 @@ int MLX90640_I2CWrite(uint8_t slaveAddr, uint16_t writeAddress, uint16_t data)
 
 void sensor_proces(uint16_t addr, uint16_t value, i2c_operation_t operation)
 {
-    if(operation == eRead && addr == STATUS_REG_ADDRESS && readStatusRegCounter <= 10)
-    {
-        if(addr == STATUS_REG_ADDRESS)
-        {
-            readStatusRegCounter++;
-        }
-        else
-        {
-            readStatusRegCounter = 0;
-        }        
-    }
-    else
-    {
-        readStatusRegCounter = 0;
-    }    
+    //latestFrameTime = gfptrGetTime();
+    currentTime = gfptrGetTime();
 
-    if(readStatusRegCounter > 10)
+    // get subpage rate
+    uint16_t subpage_refresh_rate = (Memory[CTRL_REG_1_ADDRESS] & 0x0380) >> 7;
+    float subpage_refresh_period = 1 / subpage_refresh_rate;
+
+    if(addr == 0x8000 && (value & (0x0001 << 5)) )
     {
-        readStatusRegCounter = 0;
-        
+        latestGuardTime = gfptrGetTime();
+    }
+
+    if((currentTime - latestFrameTime) > 0.2 * subpage_refresh_period)
+    {
         // test for new data available cleared by application and RAM data overwrite allowed
         if(((Memory[STATUS_REG_ADDRESS] & 0x0008) == 0x0000) && ((Memory[STATUS_REG_ADDRESS] & 0x0010) == 0x0010))
         {
@@ -185,6 +186,8 @@ void sensor_proces(uint16_t addr, uint16_t value, i2c_operation_t operation)
             }
             // new data available in RAM
             Memory[STATUS_REG_ADDRESS] |= 0x0008;
+
+            latestGuardTime = gfptrGetTime();        
         }
     } 
 }
